@@ -20,7 +20,8 @@ execd. Platform and Shipyard consume their immutable GHCR references.
   `downloads.env`. When updating Playwright, also update the Chromium revision
   copied in `Dockerfile` and check its runtime libraries.
 - For execd, update `EXECD_VERSION`, the upstream version and manifest digest
-  in `Dockerfile.execd`, and its base-image labels together. Preserve upstream
+  in `Dockerfile.execd`, its base-image labels and the version assertion in
+  `test-execd.sh` together. Preserve upstream
   runtime behavior: this mirror adds image metadata and prune protection.
 - Weekly workflows rebuild with refreshed Ubuntu packages and rescan the
   images. They **do not advance pinned upstream versions**. An execd rebuild
@@ -73,8 +74,10 @@ execd. Platform and Shipyard consume their immutable GHCR references.
 The notifier reads the existing organization Actions **variable**
 `SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL`, matching Platform. Grant repository
 access through the organization's **Variables** tab. Keep its value out of
-source, artifacts and logs; the posting step registers a log mask before use.
-Variables are available to repository workflows and are not protected like
-secrets: the posting-step mask is not repository-wide access control.
+source, artifacts and logs. Callers pass the variable through a reusable
+workflow secret parameter so masking is active before step metadata is logged;
+do not inject an unmasked variable directly into step `env`, `with` or `run`.
+Variables remain available to repository workflows: parameter masking is not
+repository-wide access control and does not turn the stored variable into a secret.
 Notify only from `main` or validated tag pushes, using a separate job and JSON
 artifacts. PRs/forks and manual runs on arbitrary tags must not send messages.

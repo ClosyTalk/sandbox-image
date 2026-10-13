@@ -154,6 +154,8 @@ jobs:
     uses: $/.github/workflows/notify-slack.yml
     with:
       result: ${{ needs.build.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && 'success' || 'failure' }}
+    secrets:
+      SLACK_WEBHOOK: ${{ vars.SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL }}
 
   publish:
     needs: [prepare, build]
