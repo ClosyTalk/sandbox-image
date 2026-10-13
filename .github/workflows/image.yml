@@ -140,6 +140,22 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  notify:
+    needs: [prepare, build, publish]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      github.repository == 'ClosyTalk/sandbox-image' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
+    permissions:
+      contents: read
+      actions: read
+    uses: $/.github/workflows/notify-slack.yml
+    with:
+      result: ${{ needs.build.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && 'success' || 'failure' }}
+    secrets:
+      SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL: ${{ secrets.SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL }}
+
   publish:
     needs: [prepare, build]
     if: github.repository == 'ClosyTalk/sandbox-image' && needs.prepare.outputs.publish == 'true'
@@ -203,3 +219,10 @@ jobs:
             --repo ClosyTalk/sandbox-image --target "$GITHUB_SHA" \
             --title "Sandbox $VERSION" --notes "Native amd64 and arm64 offline checks passed. Image: $IMAGE@$digest. SPDX SBOMs and vulnerability reports are attached. The image carries BuildKit provenance and SBOM attestations and is signed with Sigstore."
           printf 'Published `%s@%s`\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
+      - name: Record the completed publication for Slack
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publication
+          path: image.json
+          if-no-files-found: error
+          retention-days: 30
