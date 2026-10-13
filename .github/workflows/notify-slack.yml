@@ -7,9 +7,6 @@ on:
       result:
         required: true
         type: string
-    secrets:
-      SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL:
-        required: false
 
 permissions: {}
 
@@ -81,13 +78,14 @@ jobs:
       - name: Post to the development channel
         if: steps.message.outputs.notify == 'true'
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL }}
+          SLACK_WEBHOOK: ${{ vars.SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL }}
         run: |
           set -euo pipefail
           if [ -z "$SLACK_WEBHOOK" ]; then
-            echo '::error::Configure the SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL secret for this repository.'
+            echo '::error::Grant this repository access to the SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL Actions variable.'
             exit 1
           fi
+          printf '::add-mask::%s\n' "$SLACK_WEBHOOK"
           curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
             --header 'Content-Type: application/json' \
             --data @"$RUNNER_TEMP/slack-payload.json" "$SLACK_WEBHOOK"
