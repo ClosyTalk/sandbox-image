@@ -1,0 +1,95 @@
+name: Slack notifications
+
+on:
+  pull_request:
+  workflow_call:
+    inputs:
+      result:
+        required: true
+        type: string
+    secrets:
+      SLACK_WEBHOOK:
+        required: false
+
+permissions: {}
+
+jobs:
+  checks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test notification payloads without credentials or network
+        run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
+  notify:
+    # PRs keep their checks and reports; only trusted runs reach Slack.
+    if: >-
+      github.repository == 'ClosyTalk/sandbox-image' &&
+      contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event_name) &&
+      (github.ref == 'refs/heads/main' ||
+       (github.event_name == 'push' && github.ref_type == 'tag'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The caller's prepare job verifies tags belong to main.
+          # Artifacts are parsed as JSON and never executed.
+          persist-credentials: false
+      - name: Find available reports and successful publications
+        id: artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/ClosyTalk/sandbox-image/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --paginate --jq '.artifacts[] | select(.expired == false) | .name' > "$RUNNER_TEMP/artifact-names"
+          if grep -Eq '^reports-(amd64|arm64)$' "$RUNNER_TEMP/artifact-names"; then
+            echo 'reports=true' >> "$GITHUB_OUTPUT"
+          fi
+          if grep -Fxq publication "$RUNNER_TEMP/artifact-names"; then
+            echo 'publication=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download vulnerability reports as data
+        if: steps.artifacts.outputs.reports == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: reports-*
+          path: ${{ runner.temp }}/notification-artifacts
+      - name: Download successful publication metadata
+        if: steps.artifacts.outputs.publication == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: publication
+          path: ${{ runner.temp }}/notification-artifacts/publication
+      - name: Compose the notification
+        id: message
+        env:
+          PIPELINE_RESULT: ${{ inputs.result }}
+          ARTIFACT_DIRECTORY: ${{ runner.temp }}/notification-artifacts
+          PAYLOAD_PATH: ${{ runner.temp }}/slack-payload.json
+        run: python3 .github/scripts/slack_notification.py
+      - name: Post to the development channel
+        if: steps.message.outputs.notify == 'true'
+        env:
+          # The caller supplies the existing Actions variable through a
+          # secret parameter so GitHub masks even the step's env preamble.
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo '::error::Grant this repository access to the SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL Actions variable.'
+            exit 1
+          fi
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+            --header 'Content-Type: application/json' \
+            --data @"$RUNNER_TEMP/slack-payload.json" "$SLACK_WEBHOOK"
