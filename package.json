@@ -1,0 +1,8 @@
+{
+  "name": "closytalk-sandbox-browser-build",
+  "private": true,
+  "version": "0.1.0",
+  "dependencies": {
+    "playwright": "1.64.0"
+  }
+}
