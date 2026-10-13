@@ -146,7 +146,8 @@ jobs:
       always() && needs.prepare.result == 'success' &&
       github.repository == 'ClosyTalk/sandbox-image' &&
       github.event_name != 'pull_request' &&
-      (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
+      (github.ref == 'refs/heads/main' ||
+       (github.event_name == 'push' && github.ref_type == 'tag'))
     permissions:
       contents: read
       actions: read
