@@ -2,7 +2,9 @@
 ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 FROM ${UBUNTU_IMAGE} AS assets
 ARG TARGETARCH
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
+ARG APT_REFRESH
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
     && rm -rf /var/lib/apt/lists/*
 COPY downloads.env install-assets.sh /build/
 RUN sh /build/install-assets.sh "$TARGETARCH"
@@ -14,8 +16,13 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts && node node_modules/playwright/cli.js install --only-shell chromium
 
 FROM ${UBUNTU_IMAGE} AS runtime
+ARG APT_REFRESH
+ARG IMAGE_VERSION=0.1.0
+ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-image" \
       org.opencontainers.image.title="ClosyTalk agent sandbox" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.revision="${SOURCE_REVISION}" \
       keep-on-prune="true"
 ENV PATH=/opt/venv/bin:/opt/node/bin:$PATH \
     LANG=C.UTF-8 \
@@ -29,7 +36,7 @@ ENV PATH=/opt/venv/bin:/opt/node/bin:$PATH \
     AGENT_BROWSER_CONFIRM_ACTIONS=eval,download \
     AGENT_BROWSER_DOWNLOAD_PATH=/tmp/downloads \
     AGENT_BROWSER_IDLE_TIMEOUT_MS=300000
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates python3 python3-venv poppler-utils fontconfig \
     fonts-liberation fonts-crosextra-carlito fonts-dejavu-core fonts-noto-core \
     fonts-noto-color-emoji \

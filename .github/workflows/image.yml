@@ -1,0 +1,205 @@
+name: Sandbox image
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  schedule:
+    - cron: '23 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a tested rebuild from main
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: sandbox-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/closytalk/sandbox
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
+      version: ${{ steps.release.outputs.version }}
+      refresh: ${{ steps.release.outputs.refresh }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve immutable release or rebuild version
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REQUEST_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          version=$(cat VERSION)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          publish=false
+          refresh=$(date -u +%Y%m%d)
+          if [[ "$EVENT_NAME" == push && "$REF_TYPE" == tag ]]; then
+            [[ "$REF_NAME" == "v$version" ]]
+            git merge-base --is-ancestor HEAD origin/main
+            publish=true
+          elif [[ "$REF_NAME" == main && ( "$EVENT_NAME" == schedule || "$REQUEST_PUBLISH" == true ) ]]; then
+            version="$version-rebuild.$refresh.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
+            publish=true
+          fi
+          printf 'publish=%s\nversion=%s\nrefresh=%s\n' "$publish" "$version" "$refresh" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    name: Native build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
+        with:
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the native image and its attestations
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          tags: closytalk/sandbox:test
+          outputs: type=oci,dest=${{ runner.temp }}/sandbox/image.tar
+          sbom: true
+          provenance: mode=max
+          build-args: |
+            IMAGE_VERSION=${{ needs.prepare.outputs.version }}
+            SOURCE_REVISION=${{ github.sha }}
+            APT_REFRESH=${{ needs.prepare.outputs.refresh }}
+      - name: Run all offline checks on the native architecture
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker load --input "$RUNNER_TEMP/sandbox/image.tar"
+          sh test-offline.sh closytalk/sandbox:test "linux/$ARCH"
+          mkdir "$RUNNER_TEMP/sandbox/layout"
+          tar -xf "$RUNNER_TEMP/sandbox/image.tar" -C "$RUNNER_TEMP/sandbox/layout"
+      - name: Scan the complete image and enforce the vulnerability gate
+        run: |
+          set -euo pipefail
+          docker run --rm --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
+            "$TRIVY_IMAGE" image --input /scan/layout --cache-dir /scan/trivy-cache --scanners vuln \
+            --format json --output /scan/vulnerabilities.json
+          docker run --rm --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
+            "$TRIVY_IMAGE" convert --format table --severity CRITICAL \
+            --exit-code 1 /scan/vulnerabilities.json
+      - name: Export a portable SPDX SBOM
+        run: |
+          set -euo pipefail
+          docker run --rm --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
+            "$TRIVY_IMAGE" image --input /scan/layout --cache-dir /scan/trivy-cache --format spdx-json \
+            --output /scan/sbom.spdx.json
+      - name: Upload the tested image for the publish job
+        if: needs.prepare.outputs.publish == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-${{ matrix.arch }}
+          path: ${{ runner.temp }}/sandbox/image.tar
+          compression-level: 0
+          retention-days: 2
+      - name: Keep public scan and SBOM reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reports-${{ matrix.arch }}
+          path: |
+            ${{ runner.temp }}/sandbox/vulnerabilities.json
+            ${{ runner.temp }}/sandbox/sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: [prepare, build]
+    if: github.repository == 'ClosyTalk/sandbox-image' && needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Install the OCI copier
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the exact tested images, assemble and sign the manifest
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          target="$IMAGE:$VERSION"
+          if skopeo inspect --authfile "$HOME/.docker/config.json" "docker://$target" >/dev/null 2>&1; then
+            echo 'This version already exists; immutable tags cannot be overwritten.' >&2
+            exit 1
+          fi
+          for arch in amd64 arm64; do
+            candidate="$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$arch"
+            skopeo copy --all --preserve-digests --authfile "$HOME/.docker/config.json" \
+              "oci-archive:artifacts/image-$arch/image.tar" "docker://$candidate"
+          done
+          manifest="$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          docker buildx imagetools create --tag "$manifest" \
+            "$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-amd64" \
+            "$IMAGE:build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-arm64"
+          digest=$(skopeo inspect --authfile "$HOME/.docker/config.json" --format '{{.Digest}}' "docker://$manifest")
+          cosign sign --yes "$IMAGE@$digest"
+          cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity-regexp '^https://github.com/ClosyTalk/sandbox-image/.github/workflows/image.yml@refs/(heads/main|tags/v[0-9]+\.[0-9]+\.[0-9]+)$' \
+            "$IMAGE@$digest"
+          docker buildx imagetools create --tag "$target" "$IMAGE@$digest"
+          printf '{"image":"%s","version":"%s","digest":"%s"}\n' "$IMAGE" "$VERSION" "$digest" > image.json
+          for arch in amd64 arm64; do
+            cp "artifacts/reports-$arch/vulnerabilities.json" "vulnerabilities-$arch.json"
+            cp "artifacts/reports-$arch/sbom.spdx.json" "sbom-$arch.spdx.json"
+          done
+          release_flags=()
+          if [[ "$VERSION" == *-rebuild.* ]]; then release_flags+=(--prerelease); fi
+          gh release create "v$VERSION" image.json \
+            vulnerabilities-amd64.json vulnerabilities-arm64.json \
+            sbom-amd64.spdx.json sbom-arm64.spdx.json "${release_flags[@]}" \
+            --repo ClosyTalk/sandbox-image --target "$GITHUB_SHA" \
+            --title "Sandbox $VERSION" --notes "Native amd64 and arm64 offline checks passed. Image: $IMAGE@$digest. SPDX SBOMs and vulnerability reports are attached. The image carries BuildKit provenance and SBOM attestations and is signed with Sigstore."
+          printf 'Published `%s@%s`\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
