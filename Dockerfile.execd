@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
+FROM opensandbox/execd:v1.0.20@sha256:84ed968d48065768fd7e39238020fdf8e7445510896382df45fb2f4d84be942e
+ARG IMAGE_VERSION=1.0.20
+ARG SOURCE_REVISION=unknown
+LABEL keep-on-prune="true" \
+    org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-image" \
+    org.opencontainers.image.title="OpenSandbox execd with prune protection" \
+    org.opencontainers.image.version="${IMAGE_VERSION}" \
+    org.opencontainers.image.revision="${SOURCE_REVISION}" \
+    org.opencontainers.image.base.name="opensandbox/execd:v1.0.20" \
+    org.opencontainers.image.base.digest="sha256:84ed968d48065768fd7e39238020fdf8e7445510896382df45fb2f4d84be942e"
