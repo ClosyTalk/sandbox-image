@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -22,6 +23,7 @@ class OfflineRuntime(unittest.TestCase):
         self.assertEqual(run("node", "--version").strip(), "v22.23.3")
         self.assertIn("0.39.0", run("agent-browser", "--version"))
         self.assertIn("156.0.8078.4", run("chromium", "--version"))
+        self.assertIsNone(shutil.which("npm"), "Do not ship the build-only npm dependency tree in the runtime")
         with self.assertRaises(OSError):
             socket.create_connection(("1.1.1.1", 443), timeout=1)
         for directory in ("/opt/skill", "/opt/skills", "/tmp/downloads"):
@@ -82,7 +84,7 @@ class OfflineRuntime(unittest.TestCase):
     def test_fonts_and_licenses(self):
         for family in ("Liberation Sans", "Carlito", "DejaVu Sans", "Noto Sans"):
             self.assertIn(family, run("fc-match", "-f", "%{family}", family))
-        self.assertGreater(Path("/opt/node/LICENSE").stat().st_size, 1000)
+        self.assertGreater(Path("/usr/local/share/licenses/node/LICENSE").stat().st_size, 1000)
         self.assertGreater(Path("/usr/local/share/licenses/agent-browser/LICENSE").stat().st_size, 1000)
         self.assertTrue(Path("/usr/share/doc/fonts-crosextra-carlito/copyright").is_file())
         chromium_licenses = list(Path("/opt/chromium").rglob("LICENSE.headless_shell"))

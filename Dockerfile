@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1@sha256:4edf897a3ffa55b89f906fc8cc78afdb3f1834cc9c7083565e611a8a7d5fe99e
 ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55
 FROM ${UBUNTU_IMAGE} AS assets
 ARG TARGETARCH
@@ -24,7 +24,7 @@ LABEL org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-imag
       org.opencontainers.image.version="${IMAGE_VERSION}" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       keep-on-prune="true"
-ENV PATH=/opt/venv/bin:/opt/node/bin:$PATH \
+ENV PATH=/opt/venv/bin:$PATH \
     LANG=C.UTF-8 \
     MPLBACKEND=Agg \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -47,7 +47,9 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
     && rm -rf /var/lib/apt/lists/*
 # Chromium's headless dependencies from the pinned playwright-core 1.64.0.
 # Its install-deps also adds Xvfb and desktop fonts, which are not needed here.
-COPY --from=assets /opt/node /opt/node
+# npm and Corepack are build tools; only Node itself belongs in the agent runtime.
+COPY --from=assets /opt/node/bin/node /usr/local/bin/node
+COPY --from=assets /opt/node/LICENSE /usr/local/share/licenses/node/LICENSE
 COPY requirements.txt /usr/local/share/sandbox/requirements.txt
 RUN python3 -m venv /opt/venv \
     && pip install --no-cache-dir --require-hashes --only-binary=:all: -r /usr/local/share/sandbox/requirements.txt \
