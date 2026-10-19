@@ -1,7 +1,7 @@
 # AGENTS.md — ClosyTalk sandbox images
 
-This public repository builds the agent environment and mirrors OpenSandbox
-execd. Platform and Shipyard consume their immutable GHCR references.
+This public repository builds the agent environment and OpenSandbox execd from
+pinned upstream source. Platform and Shipyard consume their immutable GHCR references.
 
 ## Update policy
 
@@ -19,15 +19,31 @@ execd. Platform and Shipyard consume their immutable GHCR references.
 - Node and agent-browser versions and architecture checksums live in
   `downloads.env`. When updating Playwright, also update the Chromium revision
   copied in `Dockerfile` and check its runtime libraries.
-- For execd, update `EXECD_VERSION`, the upstream version and manifest digest
-  in `Dockerfile.execd`, its base-image labels and the version assertion in
-  `test-execd.sh` together. Preserve upstream
-  runtime behavior: this mirror adds image metadata and prune protection.
-- Weekly workflows rebuild with refreshed Ubuntu packages and rescan the
-  images. They **do not advance pinned upstream versions**. An execd rebuild
-  from the same pinned base cannot fix a vulnerability inside that base.
-  APT packages are resolved at build time, so source rebuilds need not be
-  byte-identical; the published image digest identifies the tested artifact.
+- For execd, pin the upstream repository, full source commit SHA and archive
+  checksum in `Dockerfile.execd`. Preserve the upstream binary version string;
+  `EXECD_VERSION` is the independently versioned ClosyTalk image release. Update
+  its Dockerfile default, image labels and `test-execd.sh` checks together. Use a
+  new patch release for compatible security fixes; never overwrite a published tag.
+- Build execd with the latest patched stable Go release, with its builder image
+  pinned by digest. Use `go get` and `go mod tidy` for the minimum module versions
+  fixing reviewed advisories, accepting only their required transitive upgrades.
+  Run upstream `go test ./...` and `go vet ./...` in both execd and the shared
+  internal module on each architecture before building static Linux binaries.
+  Install test prerequisites only in the builder. `execd-tests.patch` corrects
+  the upstream test that assumes arm64 has the legacy `open` syscall: it uses
+  `openat` and retains all filtering assertions. Do not skip tests or patch
+  production source to bypass failures.
+  Keep upstream ldflags and `-trimpath`; do not ship Windows binaries or the
+  unused supervisor. Preserve runtime paths, scripts, entrypoint, user, env and
+  permissions. The unchanged static bubblewrap is the only asset copied from
+  the digest-pinned upstream image; verify its checksum on both architectures.
+  Record the source repository, commit and Go version in image labels.
+- Weekly workflows rebuild with refreshed Ubuntu/Alpine packages and rescan the
+  images. They **do not advance pinned upstream commits, Go versions, modules,
+  or image digests**. Advance those pins only in a reviewed pull request. Execd
+  uses `apk upgrade --no-cache`; refresh its layer with `APK_REFRESH`. APT/APK
+  packages are resolved at build time, so source rebuilds need not be byte-identical;
+  the published image digest identifies the tested artifact.
 
 ## Required validation
 
@@ -55,7 +71,7 @@ execd. Platform and Shipyard consume their immutable GHCR references.
 | Image | Version file | Git release tag | GHCR tag |
 |---|---|---|---|
 | Agent sandbox | `VERSION` | `vX.Y.Z` | `X.Y.Z` |
-| execd mirror | `EXECD_VERSION` | `execd-vX.Y.Z` | `execd-X.Y.Z` |
+| execd source build | `EXECD_VERSION` | `execd-vX.Y.Z` | `execd-X.Y.Z` |
 
 - Use patch versions for compatible fixes and upgrades, minor versions for
   added capabilities, and major versions for incompatible consumer changes.

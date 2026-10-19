@@ -1,0 +1,14 @@
+--- a/components/execd/pkg/isolation/seccomp_gen_test.go
++++ b/components/execd/pkg/isolation/seccomp_gen_test.go
+@@ -71,9 +71,9 @@
+ 	archInfo, err := arch.GetInfo("")
+ 	require.NoError(t, err)
+ 
+-	names := []string{"open", "read", "nonexistent_syscall_xyz"}
++	names := []string{"openat", "read", "nonexistent_syscall_xyz"}
+ 	filtered := filterKnownSyscalls(archInfo, names)
+ 	assert.NotContains(t, filtered, "nonexistent_syscall_xyz", "unknown syscall should be filtered out")
+-	assert.Contains(t, filtered, "open", "open should be present on all arches")
++	assert.Contains(t, filtered, "openat", "openat should be present on all arches")
+ 	assert.Contains(t, filtered, "read", "read should be present on all arches")
+ }
