@@ -18,11 +18,13 @@ class SlackNotificationTests(unittest.TestCase):
             "conclusion": "success",
         }
 
-    def report(self, arch, severities):
+    def report(self, arch, severities, fixed=()):
         directory = self.root / f"reports-{arch}"
         directory.mkdir()
+        vulnerabilities = [{"Severity": s, "Status": "affected"} for s in severities]
+        vulnerabilities += [{"Severity": s, "Status": "fixed", "FixedVersion": "1.2.3"} for s in fixed]
         (directory / "vulnerabilities.json").write_text(json.dumps({
-            "Results": [{"Vulnerabilities": [{"Severity": s} for s in severities]}],
+            "Results": [{"Vulnerabilities": vulnerabilities}],
         }))
 
     def publication(self, version):
@@ -50,11 +52,11 @@ class SlackNotificationTests(unittest.TestCase):
 
     def test_findings_on_either_architecture_are_reported_even_after_gate_failure(self):
         self.run["conclusion"] = "failure"
-        self.report("amd64", ["CRITICAL", "HIGH", "HIGH"])
+        self.report("amd64", [], fixed=["CRITICAL", "HIGH", "HIGH"])
         self.report("arm64", ["LOW", "UNKNOWN"])
         payload = build_payload(self.run, self.root)
-        self.assertIn("amd64: CRITICAL 1, HIGH 2", payload["text"])
-        self.assertIn("arm64: LOW 1, UNKNOWN 1", payload["text"])
+        self.assertIn("amd64 — con correzione: CRITICAL 1, HIGH 2", payload["text"])
+        self.assertIn("arm64 — senza correzione: LOW 1, UNKNOWN 1", payload["text"])
         self.assertIn("failure", payload["text"])
         self.assertIn("/actions/runs/123", json.dumps(payload))
 
@@ -64,6 +66,28 @@ class SlackNotificationTests(unittest.TestCase):
         payload = build_payload(self.run, self.root)
         self.assertIn("execd-1.0.20", payload["text"])
         self.assertIn("HIGH 1", payload["text"])
+
+    def test_fixable_findings_are_separated_from_those_without_a_vendor_fix(self):
+        self.report("amd64", ["MEDIUM", "MEDIUM", "LOW"], fixed=["HIGH", "MEDIUM"])
+        payload = build_payload(self.run, self.root)
+        self.assertIn("⚠️ Vulnerabilità con correzione disponibile", payload["text"])
+        self.assertIn("amd64 — con correzione: HIGH 1, MEDIUM 1 · senza correzione: MEDIUM 2, LOW 1", payload["text"])
+
+    def test_a_fixed_version_without_status_counts_as_fixable(self):
+        directory = self.root / "reports-arm64"
+        directory.mkdir()
+        (directory / "vulnerabilities.json").write_text(json.dumps({
+            "Results": [{"Vulnerabilities": [{"Severity": "HIGH", "FixedVersion": "1.27.2"}]}],
+        }))
+        self.assertIn("arm64 — con correzione: HIGH 1", build_payload(self.run, self.root)["text"])
+
+    def test_findings_without_any_vendor_fix_are_reported_as_such(self):
+        self.report("amd64", ["MEDIUM", "LOW"])
+        self.report("arm64", ["MEDIUM"])
+        payload = build_payload(self.run, self.root)
+        self.assertIn("ℹ️ Solo vulnerabilità senza correzione del fornitore", payload["text"])
+        self.assertNotIn("con correzione:", payload["text"])
+        self.assertIn("arm64 — senza correzione: MEDIUM 1", payload["text"])
 
     def test_clean_scans_and_missing_reports_do_not_send_a_message(self):
         self.assertIsNone(build_payload(self.run, self.root))
