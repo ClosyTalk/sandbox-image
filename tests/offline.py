@@ -1,5 +1,6 @@
 """Run inside the image with Docker networking disabled; only loopback is used."""
 import http.server
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -18,20 +19,36 @@ def run(*args, timeout=45):
 
 
 class OfflineRuntime(unittest.TestCase):
+    def test_no_build_tools_in_runtime(self):
+        for module in ("pip", "setuptools", "wheel"):
+            self.assertIsNone(importlib.util.find_spec(module), f"Do not ship {module}")
+        for binary in ("pip", "pip3", "ffprobe", "gcc", "make"):
+            self.assertIsNone(shutil.which(binary), f"Do not ship {binary}")
+        packages = run("dpkg-query", "-W", "-f=${Package}\n").splitlines()
+        for package in ("ffmpeg", "libvpx9", "python3-pip", "python3-venv", "python3-pip-whl", "python3-setuptools-whl"):
+            self.assertNotIn(package, packages)
+
     def test_ffmpeg_as_sandbox_user(self):
         self.assertEqual(os.getuid(), 10001)
         self.assertEqual(pwd.getpwuid(os.getuid()).pw_name, "sandbox")
         self.assertIsNotNone(shutil.which("ffmpeg"), "Recording requires ffmpeg on PATH")
         version = run("ffmpeg", "-version").splitlines()[0]
         self.assertIn("ffmpeg version", version)
+        self.assertIn("GNU Lesser General Public", run("ffmpeg", "-L"))
         print(f"\n{version} (user=sandbox)", flush=True)
 
     def test_browser_recording_offline(self):
+        self.check_browser_recording(cursor=False)
+
+    def test_browser_recording_with_cursor_offline(self):
+        self.check_browser_recording(cursor=True)
+
+    def check_browser_recording(self, cursor):
         self.assertEqual(os.getuid(), 10001)
 
         def browser(*args):
             result = subprocess.run(
-                ("agent-browser", "--session", "offline-recording", "--json", *args),
+                ("agent-browser", "--session", f"offline-recording-{cursor}", "--json", *args),
                 capture_output=True, text=True, timeout=45,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -49,25 +66,37 @@ class OfflineRuntime(unittest.TestCase):
             video = root / "recording.webm"
             try:
                 browser("open", page.as_uri())
-                browser("record", "start", str(video))
+                browser("set", "viewport", "801", "601")
+                browser("record", "start", str(video), *(("--cursor",) if cursor else ()))
                 browser("fill", "#name", "ClosyTalk")
                 browser("click", "button")
                 self.assertIn("Saved ClosyTalk", json.dumps(browser("get", "text", "#result")))
                 browser("record", "stop")
                 self.assertTrue(video.is_file(), "Recording must produce a WebM file")
                 self.assertGreater(video.stat().st_size, 0)
-                probe = json.loads(run(
-                    "ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
-                    "-show_entries", "format=format_name:stream=codec_type,width,height,nb_read_frames",
-                    "-of", "json", str(video),
-                ))
-                self.assertIn("webm", probe["format"]["format_name"])
-                self.assertEqual(len(probe["streams"]), 1, probe)
-                stream = probe["streams"][0]
-                self.assertEqual(stream["codec_type"], "video")
-                self.assertGreater(stream["width"], 0)
-                self.assertGreater(stream["height"], 0)
-                self.assertGreater(int(stream["nb_read_frames"]), 0)
+                # EBML header and DocType, then decode an actual video frame with
+                # the bundled Chromium. No ffprobe or extra FFmpeg decoder needed.
+                header = video.read_bytes()[:64]
+                self.assertTrue(header.startswith(b"\x1a\x45\xdf\xa3"), header)
+                self.assertIn(b"\x42\x82\x84webm", header)
+                player = root / "player.html"
+                player.write_text('''<!doctype html><video muted autoplay src="recording.webm"></video>
+                <script>
+                const video = document.querySelector('video');
+                video.requestVideoFrameCallback((now, frame) => {
+                    const result = document.createElement('p');
+                    result.id = 'decoded';
+                    result.textContent = JSON.stringify({width: video.videoWidth,
+                        height: video.videoHeight, frames: frame.presentedFrames});
+                    document.body.append(result);
+                });
+                </script>''')
+                browser("open", player.as_uri())
+                browser("wait", "#decoded")
+                probe = json.loads(browser("get", "text", "#decoded")["text"])
+                self.assertEqual(probe["width"], 802, "Pad odd viewport dimensions for VP8")
+                self.assertEqual(probe["height"], 602, "Pad odd viewport dimensions for VP8")
+                self.assertGreater(probe["frames"], 0)
                 print(f"\nOffline recording: {video.stat().st_size} bytes; {json.dumps(probe)}", flush=True)
             finally:
                 browser("close")
@@ -141,6 +170,8 @@ class OfflineRuntime(unittest.TestCase):
             self.assertIn(family, run("fc-match", "-f", "%{family}", family))
         self.assertGreater(Path("/usr/local/share/licenses/node/LICENSE").stat().st_size, 1000)
         self.assertGreater(Path("/usr/local/share/licenses/agent-browser/LICENSE").stat().st_size, 1000)
+        self.assertGreater(Path("/usr/local/share/licenses/ffmpeg/COPYING.LGPLv2.1").stat().st_size, 1000)
+        self.assertGreater(Path("/usr/local/share/licenses/libvpx/LICENSE").stat().st_size, 1000)
         self.assertTrue(Path("/usr/share/doc/fonts-crosextra-carlito/copyright").is_file())
         chromium_licenses = list(Path("/opt/chromium").rglob("LICENSE.headless_shell"))
         self.assertEqual(len(chromium_licenses), 1)
