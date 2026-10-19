@@ -17,7 +17,7 @@ RUN npm ci --ignore-scripts && node node_modules/playwright/cli.js install --onl
 
 FROM ${UBUNTU_IMAGE} AS runtime
 ARG APT_REFRESH
-ARG IMAGE_VERSION=0.1.0
+ARG IMAGE_VERSION=0.2.0
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-image" \
       org.opencontainers.image.title="ClosyTalk agent sandbox" \
@@ -37,7 +37,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     AGENT_BROWSER_DOWNLOAD_PATH=/tmp/downloads \
     AGENT_BROWSER_IDLE_TIMEOUT_MS=300000
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    ca-certificates python3 python3-venv poppler-utils fontconfig \
+    ca-certificates python3 python3-venv poppler-utils fontconfig ffmpeg \
     fonts-liberation fonts-crosextra-carlito fonts-dejavu-core fonts-noto-core \
     fonts-noto-color-emoji \
     libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \

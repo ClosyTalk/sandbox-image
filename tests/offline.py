@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import pwd
 import shutil
 import socket
 import subprocess
@@ -17,6 +18,60 @@ def run(*args, timeout=45):
 
 
 class OfflineRuntime(unittest.TestCase):
+    def test_ffmpeg_as_sandbox_user(self):
+        self.assertEqual(os.getuid(), 10001)
+        self.assertEqual(pwd.getpwuid(os.getuid()).pw_name, "sandbox")
+        self.assertIsNotNone(shutil.which("ffmpeg"), "Recording requires ffmpeg on PATH")
+        version = run("ffmpeg", "-version").splitlines()[0]
+        self.assertIn("ffmpeg version", version)
+        print(f"\n{version} (user=sandbox)", flush=True)
+
+    def test_browser_recording_offline(self):
+        self.assertEqual(os.getuid(), 10001)
+
+        def browser(*args):
+            result = subprocess.run(
+                ("agent-browser", "--session", "offline-recording", "--json", *args),
+                capture_output=True, text=True, timeout=45,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            response = json.loads(result.stdout)
+            self.assertTrue(response["success"], response)
+            return response["data"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            page = root / "recording.html"
+            page.write_text('''<!doctype html><html><title>Offline recording</title>
+            <body><label>Name <input id="name"></label>
+            <button onclick="document.querySelector('#result').textContent='Saved '+document.querySelector('#name').value">Save</button>
+            <p id="result">Waiting</p></body></html>''')
+            video = root / "recording.webm"
+            try:
+                browser("open", page.as_uri())
+                browser("record", "start", str(video))
+                browser("fill", "#name", "ClosyTalk")
+                browser("click", "button")
+                self.assertIn("Saved ClosyTalk", json.dumps(browser("get", "text", "#result")))
+                browser("record", "stop")
+                self.assertTrue(video.is_file(), "Recording must produce a WebM file")
+                self.assertGreater(video.stat().st_size, 0)
+                probe = json.loads(run(
+                    "ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                    "-show_entries", "format=format_name:stream=codec_type,width,height,nb_read_frames",
+                    "-of", "json", str(video),
+                ))
+                self.assertIn("webm", probe["format"]["format_name"])
+                self.assertEqual(len(probe["streams"]), 1, probe)
+                stream = probe["streams"][0]
+                self.assertEqual(stream["codec_type"], "video")
+                self.assertGreater(stream["width"], 0)
+                self.assertGreater(stream["height"], 0)
+                self.assertGreater(int(stream["nb_read_frames"]), 0)
+                print(f"\nOffline recording: {video.stat().st_size} bytes; {json.dumps(probe)}", flush=True)
+            finally:
+                browser("close")
+
     def test_runtime_and_no_external_network(self):
         self.assertEqual(os.getuid(), 10001, "Agent code must run as the sandbox user")
         self.assertEqual(platform.python_version_tuple()[:2], ("3", "12"))
