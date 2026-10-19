@@ -15,9 +15,31 @@ WORKDIR /build
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts && node node_modules/playwright/cli.js install --only-shell chromium
 
+FROM ${UBUNTU_IMAGE} AS ffmpeg
+ARG TARGETARCH
+ARG APT_REFRESH
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends \
+    ca-certificates curl xz-utils gnupg build-essential pkg-config nasm zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY downloads.env build-ffmpeg.sh /build/
+RUN sh /build/build-ffmpeg.sh "$TARGETARCH"
+
+# Keep venv creation and its wheel bootstrap packages out of the runtime.
+FROM ${UBUNTU_IMAGE} AS python
+ARG APT_REFRESH
+RUN apt-get update && apt-get upgrade -y \
+    && apt-get install -y --no-install-recommends ca-certificates python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt /usr/local/share/sandbox/requirements.txt
+RUN python3 -m venv /opt/venv \
+    && /opt/venv/bin/pip install --no-cache-dir --require-hashes --only-binary=:all: -r /usr/local/share/sandbox/requirements.txt \
+    && /opt/venv/bin/pip check \
+    && /opt/venv/bin/python -m pip uninstall -y pip setuptools wheel
+
 FROM ${UBUNTU_IMAGE} AS runtime
 ARG APT_REFRESH
-ARG IMAGE_VERSION=0.2.0
+ARG IMAGE_VERSION=0.2.1
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-image" \
       org.opencontainers.image.title="ClosyTalk agent sandbox" \
@@ -37,7 +59,7 @@ ENV PATH=/opt/venv/bin:$PATH \
     AGENT_BROWSER_DOWNLOAD_PATH=/tmp/downloads \
     AGENT_BROWSER_IDLE_TIMEOUT_MS=300000
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
-    ca-certificates python3 python3-venv poppler-utils fontconfig ffmpeg \
+    ca-certificates python3 poppler-utils fontconfig \
     fonts-liberation fonts-crosextra-carlito fonts-dejavu-core fonts-noto-core \
     fonts-noto-color-emoji \
     libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
@@ -51,9 +73,11 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-reco
 COPY --from=assets /opt/node/bin/node /usr/local/bin/node
 COPY --from=assets /opt/node/LICENSE /usr/local/share/licenses/node/LICENSE
 COPY requirements.txt /usr/local/share/sandbox/requirements.txt
-RUN python3 -m venv /opt/venv \
-    && pip install --no-cache-dir --require-hashes --only-binary=:all: -r /usr/local/share/sandbox/requirements.txt \
-    && pip check
+COPY --from=python /opt/venv /opt/venv
+COPY --from=ffmpeg /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg /usr/local/share/licenses/ffmpeg /usr/local/share/licenses/ffmpeg
+COPY --from=ffmpeg /usr/local/share/licenses/libvpx /usr/local/share/licenses/libvpx
+COPY --from=ffmpeg /usr/local/share/sandbox/ffmpeg-build /usr/local/share/sandbox/ffmpeg-build
 # Headless Shell excludes the proprietary Widevine CDM bundled with full Chrome for Testing.
 COPY --from=browser /opt/playwright/chromium_headless_shell-1248 /opt/chromium
 COPY --from=assets /usr/local/bin/agent-browser /usr/local/bin/agent-browser
