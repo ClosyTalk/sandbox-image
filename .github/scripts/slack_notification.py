@@ -7,6 +7,10 @@ from pathlib import Path
 import re
 
 
+def summarise(counts):
+    return ", ".join(f"{severity} {counts[severity]}" for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN") if counts[severity])
+
+
 def build_payload(run, artifact_directory):
     directory = Path(artifact_directory)
     lines = []
@@ -26,21 +30,32 @@ def build_payload(run, artifact_directory):
         links.append(f"<https://github.com/ClosyTalk/sandbox-image/releases/tag/{tag}|Release e report>")
 
     findings = []
+    any_fixable = False
     for arch in ("amd64", "arm64"):
         report = directory / f"reports-{arch}" / "vulnerabilities.json"
         if not report.is_file():
             continue
         results = json.loads(report.read_text()).get("Results") or []
-        counts = Counter(
-            vulnerability.get("Severity", "UNKNOWN")
-            for result in results
-            for vulnerability in result.get("Vulnerabilities") or []
-        )
-        if counts:
-            summary = ", ".join(f"{severity} {counts[severity]}" for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN") if counts[severity])
-            findings.append(f"{arch}: {summary}")
+        counts = {True: Counter(), False: Counter()}
+        for result in results:
+            for vulnerability in result.get("Vulnerabilities") or []:
+                fixable = vulnerability.get("Status") == "fixed" or bool(vulnerability.get("FixedVersion"))
+                counts[fixable][vulnerability.get("Severity", "UNKNOWN")] += 1
+        groups = [
+            f"{label}: {summarise(counts[fixable])}"
+            for fixable, label in ((True, "con correzione"), (False, "senza correzione"))
+            if counts[fixable]
+        ]
+        if groups:
+            any_fixable = any_fixable or bool(counts[True])
+            findings.append(f"{arch} — " + " · ".join(groups))
     if findings:
-        lines.extend([f'⚠️ Vulnerabilità rilevate — {run["name"]}', *findings])
+        title = (
+            "⚠️ Vulnerabilità con correzione disponibile"
+            if any_fixable
+            else "ℹ️ Solo vulnerabilità senza correzione del fornitore"
+        )
+        lines.extend([f'{title} — {run["name"]}', *findings])
         lines.append("CRITICAL blocca la pubblicazione; le altre severità sono segnalate.")
     if not lines:
         return None
