@@ -5,8 +5,6 @@ on:
   push:
     branches: [main]
     tags: ['execd-v*.*.*']
-  schedule:
-    - cron: '23 4 * * 1'
   workflow_dispatch:
     inputs:
       publish:
@@ -56,7 +54,7 @@ jobs:
             [[ "$REF_NAME" == "execd-v$version" ]]
             git merge-base --is-ancestor HEAD origin/main
             publish=true
-          elif [[ "$REF_NAME" == main && ( "$EVENT_NAME" == schedule || "$REQUEST_PUBLISH" == true ) ]]; then
+          elif [[ "$REF_NAME" == main && "$EVENT_NAME" == workflow_dispatch && "$REQUEST_PUBLISH" == true ]]; then
             version="$version-rebuild.$refresh.$GITHUB_RUN_ID.$GITHUB_RUN_ATTEMPT"
             publish=true
           fi
@@ -111,16 +109,19 @@ jobs:
       - name: Scan the complete image and enforce the vulnerability gate
         run: |
           set -euo pipefail
-          docker run --rm --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges -u "$(id -u):$(id -g)" \
+            --env HOME=/scan --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
             "$TRIVY_IMAGE" image --input /scan/layout --cache-dir /scan/trivy-cache --scanners vuln \
             --format json --output /scan/vulnerabilities.json
-          docker run --rm --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges -u "$(id -u):$(id -g)" \
+            --env HOME=/scan --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
             "$TRIVY_IMAGE" convert --format table --severity CRITICAL \
             --exit-code 1 /scan/vulnerabilities.json
       - name: Export a portable SPDX SBOM
         run: |
           set -euo pipefail
-          docker run --rm --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges -u "$(id -u):$(id -g)" \
+            --env HOME=/scan --mount "type=bind,source=$RUNNER_TEMP/sandbox,target=/scan" \
             "$TRIVY_IMAGE" image --input /scan/layout --cache-dir /scan/trivy-cache --format spdx-json \
             --output /scan/sbom.spdx.json
       - name: Upload the tested image for the publish job
@@ -153,9 +154,10 @@ jobs:
     permissions:
       contents: read
       actions: read # Read build artifacts for the notification.
-    uses: $/.github/workflows/notify-slack.yml
+    uses: ./.github/workflows/notify-slack.yml
     with:
       result: ${{ needs.build.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && 'success' || 'failure' }}
+      job-results: ${{ toJSON(needs) }}
     secrets:
       SLACK_WEBHOOK: ${{ vars.SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL }}
 

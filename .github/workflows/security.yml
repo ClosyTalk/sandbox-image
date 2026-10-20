@@ -1,0 +1,250 @@
+# Nightly security scan of what consumers actually pin.
+#
+# New advisories land against images and lockfiles that have not changed, so
+# rebuilding is not the signal: this rescans the recent stable releases by
+# digest, the hashed lockfiles and the workflows themselves. A red nightly on a
+# published image means its consumers are exposed until a patched release is
+# rolled out; a fix that only needs refreshed OS packages is a manual
+# `publish` rebuild of image.yml or execd.yml from main.
+#
+# Scanners run as digest-pinned containers with no capabilities, as the runner
+# uid, without the docker socket and with no token. Trivy applies the same
+# CRITICAL gate as the build workflows; OSV-Scanner and zizmor match Platform
+# and Shipyard.
+
+name: Security
+
+on:
+  pull_request:
+  schedule:
+    - cron: '37 4 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: security-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+env:
+  # Refresh a pin with `docker buildx imagetools inspect <image>:<tag>`.
+  TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
+  OSV_IMAGE: ghcr.io/google/osv-scanner:v2.4.0@sha256:5116601dedc01c1c580eb92371883ec052fc4c13c3fbc109d621a63ac416d475
+  ZIZMOR_IMAGE: ghcr.io/zizmorcore/zizmor:1.28.0@sha256:8e6b3e4fb74d1aa5d23e83ea369f386c66eced0d1fb944d32cd8b2aac100b00d
+
+jobs:
+  lockfiles:
+    name: Lockfiles (OSV-Scanner)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scan requirements.txt and package-lock.json
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/osv"
+          # osv-scanner exits 1 on any finding; the gate below reads the JSON
+          # and fails on a missing report.
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges -u "$(id -u):$(id -g)" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/src,readonly" \
+            --mount "type=bind,source=$RUNNER_TEMP/osv,target=/out" \
+            "$OSV_IMAGE" scan source \
+            --lockfile=/src/requirements.txt --lockfile=/src/package-lock.json \
+            --format=json --all-packages --output-file=/out/lockfiles.json --verbosity=warn || true
+      - name: Report and enforce the vulnerability gate
+        env:
+          OSV_JSON: ${{ runner.temp }}/osv/lockfiles.json
+        run: |
+          python3 -I - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+
+          report = json.loads(Path(os.environ["OSV_JSON"]).read_text())
+          results = report.get("results") or []
+          # Far fewer packages than the lockfile holds means it was not parsed in full.
+          for lockfile, floor in {"requirements.txt": 20, "package-lock.json": 2}.items():
+              scanned = sum(len(r.get("packages") or []) for r in results if Path(r["source"]["path"]).name == lockfile)
+              if scanned < floor:
+                  sys.exit(f"::error::osv-scanner parsed only {scanned} package(s) from {lockfile}")
+
+          def severity(vulnerability, group):
+              label = (vulnerability.get("database_specific") or {}).get("severity")
+              if label:
+                  return label
+              try:
+                  score = float((group or {}).get("max_severity", ""))
+              except ValueError:
+                  return "UNKNOWN"
+              return "CRITICAL" if score >= 9 else "HIGH" if score >= 7 else "MODERATE" if score >= 4 else "LOW"
+
+          rows = []
+          for result in results:
+              for package in result.get("packages") or []:
+                  for vulnerability in package.get("vulnerabilities") or []:
+                      group = next((g for g in package.get("groups") or [] if vulnerability["id"] in g["ids"]), None)
+                      name = f'{package["package"]["name"]}@{package["package"]["version"]}'
+                      rows.append((severity(vulnerability, group), name, vulnerability["id"]))
+          rows.sort()
+          lines = ["## Lockfiles (`requirements.txt`, `package-lock.json`)", ""]
+          lines += [f"- {s} `{name}` [{advisory}](https://osv.dev/{advisory})" for s, name, advisory in rows] or ["No findings."]
+          critical = [row for row in rows if row[0] == "CRITICAL"]
+          lines += ["", f"CRITICAL findings: {len(critical)}. Other severities are reported, not blocking."]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("\n".join(lines) + "\n")
+          if critical:
+              sys.exit(f"::error::{len(critical)} critical advisory(ies) in the lockfiles")
+          PY
+      - name: Keep the OSV report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: osv-lockfiles
+          path: ${{ runner.temp }}/osv/lockfiles.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  workflows:
+    name: Workflows (zizmor)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Audit the workflows
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/zizmor"
+          # Offline audits need no token. The baseline is clean, so any
+          # finding fails; suppress one only with a justified inline comment.
+          status=0
+          docker run --rm --cap-drop ALL --security-opt no-new-privileges -u "$(id -u):$(id -g)" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/.github,target=/work/.github,readonly" \
+            --workdir /work "$ZIZMOR_IMAGE" --offline --no-progress --color=never --format=plain \
+            .github/workflows > "$RUNNER_TEMP/zizmor/zizmor.txt" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/zizmor/zizmor.txt"
+          {
+            echo '## Workflows (zizmor)'
+            echo '```'
+            head -c 400000 "$RUNNER_TEMP/zizmor/zizmor.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  releases:
+    name: Resolve published releases
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read # List the files a pull request changes.
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - name: Read the image and digest of the recent stable releases
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Covers the current release and those consumers have not yet left.
+          RECENT_RELEASES: 3
+        run: |
+          set -euo pipefail
+          # Published images do not change with a pull request: scan them there
+          # only to validate edits to this workflow.
+          if [[ "$EVENT_NAME" == pull_request ]] &&
+            ! gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' |
+              grep -Fxq .github/workflows/security.yml; then
+            echo 'matrix=[]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases \
+            --limit 1000 --json tagName --jq '.[].tagName' > "$RUNNER_TEMP/tags"
+          : > "$RUNNER_TEMP/releases"
+          for pattern in '^v[0-9]+\.[0-9]+\.[0-9]+$' '^execd-v[0-9]+\.[0-9]+\.[0-9]+$'; do
+            for tag in $({ grep -E "$pattern" "$RUNNER_TEMP/tags" || true; } | sort -V | tail -n "$RECENT_RELEASES"); do
+              # The release workflow records the signed digest in image.json.
+              gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern image.json --output - |
+                jq -ce --arg version "${tag/v/}" '
+                  select(.image == "ghcr.io/closytalk/sandbox" and .version == $version
+                    and (.digest | test("^sha256:[a-f0-9]{64}$")))
+                  | {version, ref: "\(.image)@\(.digest)"}' >> "$RUNNER_TEMP/releases"
+            done
+          done
+          if [ ! -s "$RUNNER_TEMP/releases" ]; then
+            echo '::error::No stable release to scan.' >&2
+            exit 1
+          fi
+          matrix=$(jq -sc '[.[] | . as $release | ("amd64", "arm64") | $release + {arch: .}]' "$RUNNER_TEMP/releases")
+          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
+          jq -r '"- `\(.version)` `\(.ref)`"' "$RUNNER_TEMP/releases" >> "$GITHUB_STEP_SUMMARY"
+
+  images:
+    name: Published ${{ matrix.version }} (${{ matrix.arch }})
+    needs: releases
+    if: needs.releases.outputs.matrix != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.releases.outputs.matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Public images are pulled anonymously: the job needs no token.
+    permissions: {}
+    steps:
+      - name: Scan the published image and enforce the vulnerability gate
+        env:
+          IMAGE_REF: ${{ matrix.ref }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/scan"
+          trivy() {
+            docker run --rm --cap-drop ALL --security-opt no-new-privileges -u "$(id -u):$(id -g)" \
+              --env HOME=/scan --mount "type=bind,source=$RUNNER_TEMP/scan,target=/scan" "$TRIVY_IMAGE" "$@"
+          }
+          # The registry is read directly, so the scanner needs no docker socket.
+          trivy image --image-src remote --platform "linux/$ARCH" --cache-dir /scan/trivy-cache \
+            --scanners vuln --format json --output /scan/vulnerabilities.json "$IMAGE_REF"
+          jq -e --arg arch "$ARCH" '.Metadata.ImageConfig.architecture == $arch' \
+            "$RUNNER_TEMP/scan/vulnerabilities.json" > /dev/null
+          {
+            echo "## \`$IMAGE_REF\` ($ARCH)"
+            jq -r '[.Results[]?.Vulnerabilities[]?] | group_by(.Severity)
+              | map("\(.[0].Severity) \(length)") | join(", ") | if . == "" then "No findings." else . end' \
+              "$RUNNER_TEMP/scan/vulnerabilities.json"
+          } >> "$GITHUB_STEP_SUMMARY"
+          trivy convert --format table --severity CRITICAL --exit-code 1 /scan/vulnerabilities.json
+      - name: Keep the vulnerability report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reports-${{ matrix.version }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/scan/vulnerabilities.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  notify:
+    needs: [lockfiles, workflows, releases, images]
+    # Only a red nightly or manual run on main leaves GitHub; on a pull
+    # request the failed check already reaches its author.
+    if: >-
+      !cancelled() && contains(needs.*.result, 'failure') &&
+      github.repository == 'ClosyTalk/sandbox-image' && github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event_name)
+    permissions:
+      contents: read
+      actions: read # Read scan artifacts for the notification.
+    uses: ./.github/workflows/notify-slack.yml
+    with:
+      result: failure
+      job-results: ${{ toJSON(needs) }}
+    secrets:
+      SLACK_WEBHOOK: ${{ vars.SLACK_DEVELOPMENT_CHANNEL_WEBHOOK_URL }}

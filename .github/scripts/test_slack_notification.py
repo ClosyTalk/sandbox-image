@@ -60,6 +60,35 @@ class SlackNotificationTests(unittest.TestCase):
         self.assertIn("failure", payload["text"])
         self.assertIn("/actions/runs/123", json.dumps(payload))
 
+    def test_failed_runs_are_reported_even_without_reports(self):
+        self.run["conclusion"] = "failure"
+        payload = build_payload(self.run, self.root, {
+            "lockfiles": {"result": "failure"},
+            "workflows": {"result": "success"},
+            "images": {"result": "failure"},
+        })
+        self.assertIn("❌ Sandbox image: controlli falliti (images, lockfiles)", payload["text"])
+        self.assertIn("/actions/runs/123", json.dumps(payload))
+
+    def test_published_release_reports_are_labelled_by_version(self):
+        self.run["conclusion"] = "failure"
+        for name in ("0.2.1-amd64", "execd-1.0.21-arm64"):
+            directory = self.root / f"reports-{name}"
+            directory.mkdir()
+            (directory / "vulnerabilities.json").write_text(json.dumps({
+                "Results": [{"Vulnerabilities": [{"Severity": "CRITICAL", "FixedVersion": "2.0"}]}],
+            }))
+        payload = build_payload(self.run, self.root)
+        self.assertIn("0.2.1-amd64 — con correzione: CRITICAL 1", payload["text"])
+        self.assertIn("execd-1.0.21-arm64 — con correzione: CRITICAL 1", payload["text"])
+
+    def test_unexpected_report_names_are_rejected(self):
+        directory = self.root / "reports-<!channel>"
+        directory.mkdir()
+        (directory / "vulnerabilities.json").write_text(json.dumps({"Results": []}))
+        with self.assertRaisesRegex(ValueError, "Invalid report name"):
+            build_payload(self.run, self.root)
+
     def test_publication_and_findings_share_one_message(self):
         self.publication("execd-1.0.20")
         self.report("amd64", ["HIGH"])
