@@ -53,6 +53,13 @@ pinned upstream source. Platform and Shipyard consume their immutable GHCR refer
 - `CRITICAL` is the existing blocking gate. Review `HIGH` and other findings
   in the PR, including upstream fixes and applicability. Do not lower the
   gate, suppress findings, or skip an architecture to make an update pass.
+- `security.yml` runs on every PR and nightly. OSV-Scanner gates
+  `requirements.txt` and `package-lock.json` on `CRITICAL`; zizmor fails on
+  any unsuppressed workflow finding; Trivy rescans the three most recent stable
+  releases of each image by digest on both architectures with the same gate.
+  A red nightly on a published image means its consumers are exposed until a
+  patched release or rebuild is rolled out. Scanners run as digest-pinned
+  containers without capabilities, root, docker socket or credentials.
 - Trivy's report alone does not prove vendored Node, Chromium or agent-browser
   binaries are free of vulnerabilities. Review their official advisories
   when changing versions and record relevant findings in the PR.

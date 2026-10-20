@@ -7,6 +7,11 @@ on:
       result:
         required: true
         type: string
+      job-results:
+        description: toJSON(needs) of the caller, to name the failed jobs.
+        required: false
+        type: string
+        default: '{}'
     secrets:
       SLACK_WEBHOOK:
         required: false
@@ -53,7 +58,7 @@ jobs:
           set -euo pipefail
           gh api "repos/ClosyTalk/sandbox-image/actions/runs/$GITHUB_RUN_ID/artifacts" \
             --paginate --jq '.artifacts[] | select(.expired == false) | .name' > "$RUNNER_TEMP/artifact-names"
-          if grep -Eq '^reports-(amd64|arm64)$' "$RUNNER_TEMP/artifact-names"; then
+          if grep -Eq '^reports-' "$RUNNER_TEMP/artifact-names"; then
             echo 'reports=true' >> "$GITHUB_OUTPUT"
           fi
           if grep -Fxq publication "$RUNNER_TEMP/artifact-names"; then
@@ -75,6 +80,7 @@ jobs:
         id: message
         env:
           PIPELINE_RESULT: ${{ inputs.result }}
+          JOB_RESULTS: ${{ inputs.job-results }}
           ARTIFACT_DIRECTORY: ${{ runner.temp }}/notification-artifacts
           PAYLOAD_PATH: ${{ runner.temp }}/slack-payload.json
         run: python3 .github/scripts/slack_notification.py

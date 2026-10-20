@@ -11,10 +11,13 @@ def summarise(counts):
     return ", ".join(f"{severity} {counts[severity]}" for severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN") if counts[severity])
 
 
-def build_payload(run, artifact_directory):
+def build_payload(run, artifact_directory, job_results=None):
     directory = Path(artifact_directory)
     lines = []
     links = []
+    if run["conclusion"] == "failure":
+        failed = sorted(job for job, need in (job_results or {}).items() if need.get("result") == "failure")
+        lines.append(f'❌ {run["name"]}: controlli falliti' + (f' ({", ".join(failed)})' if failed else ""))
     publication = directory / "publication" / "image.json"
     if publication.is_file():
         image = json.loads(publication.read_text())
@@ -31,10 +34,12 @@ def build_payload(run, artifact_directory):
 
     findings = []
     any_fixable = False
-    for arch in ("amd64", "arm64"):
-        report = directory / f"reports-{arch}" / "vulnerabilities.json"
-        if not report.is_file():
-            continue
+    # reports-<arch> from the build workflows, reports-<version>-<arch> from the
+    # nightly scan of published releases.
+    for report in sorted(directory.glob("reports-*/vulnerabilities.json")):
+        label = report.parent.name.removeprefix("reports-")
+        if not re.fullmatch(r"(?:(?:execd-)?\d+\.\d+\.\d+-)?(?:amd64|arm64)", label):
+            raise ValueError("Invalid report name")
         results = json.loads(report.read_text()).get("Results") or []
         counts = {True: Counter(), False: Counter()}
         for result in results:
@@ -48,7 +53,7 @@ def build_payload(run, artifact_directory):
         ]
         if groups:
             any_fixable = any_fixable or bool(counts[True])
-            findings.append(f"{arch} — " + " · ".join(groups))
+            findings.append(f"{label} — " + " · ".join(groups))
     if findings:
         title = (
             "⚠️ Vulnerabilità con correzione disponibile"
@@ -83,7 +88,8 @@ if __name__ == "__main__":
         "head_branch": os.environ["GITHUB_REF_NAME"],
         "conclusion": os.environ["PIPELINE_RESULT"],
     }
-    payload = build_payload(run, os.environ["ARTIFACT_DIRECTORY"])
+    job_results = json.loads(os.environ.get("JOB_RESULTS") or "{}")
+    payload = build_payload(run, os.environ["ARTIFACT_DIRECTORY"], job_results)
     if payload:
         Path(os.environ["PAYLOAD_PATH"]).write_text(json.dumps(payload))
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
