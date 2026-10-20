@@ -7,7 +7,7 @@ pinned upstream source. Platform and Shipyard consume their immutable GHCR refer
 
 - Submit changes through a pull request into `main`. Do not push to `main`,
   merge, tag, or publish without authorization in the current conversation.
-- Review upstream releases and advisories when reviewing the weekly scan.
+- Review upstream releases and advisories when reviewing the nightly scan.
   Security fixes take priority over routine upgrades; review compatibility
   before updating a consumer's image reference.
 - Keep base images, downloaded binaries and GitHub Actions pinned by digest
@@ -38,10 +38,13 @@ pinned upstream source. Platform and Shipyard consume their immutable GHCR refer
   permissions. The unchanged static bubblewrap is the only asset copied from
   the digest-pinned upstream image; verify its checksum on both architectures.
   Record the source repository, commit and Go version in image labels.
-- Weekly workflows rebuild with refreshed Ubuntu/Alpine packages and rescan the
-  images. They **do not advance pinned upstream commits, Go versions, modules,
-  or image digests**. Advance those pins only in a reviewed pull request. Execd
-  uses `apk upgrade --no-cache`; refresh its layer with `APK_REFRESH`. APT/APK
+- Rebuilds with refreshed Ubuntu/Alpine packages are manual: when the nightly
+  scan reports findings fixed by newer OS packages, run the image workflow on
+  `main` with `publish`. There is no scheduled rebuild: consumers pin a version
+  and never pick one up on their own. Rebuilds **do not advance pinned upstream
+  commits, Go versions, modules, or image digests**. Advance those pins only in
+  a reviewed pull request. Execd uses `apk upgrade --no-cache`; refresh its
+  layer with `APK_REFRESH`. APT/APK
   packages are resolved at build time, so source rebuilds need not be byte-identical;
   the published image digest identifies the tested artifact.
 
