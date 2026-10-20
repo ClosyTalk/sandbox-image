@@ -151,7 +151,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    uses: $/.github/workflows/notify-slack.yml
+    uses: ./.github/workflows/notify-slack.yml
     with:
       result: ${{ needs.build.result == 'success' && (needs.publish.result == 'success' || needs.publish.result == 'skipped') && 'success' || 'failure' }}
     secrets:
