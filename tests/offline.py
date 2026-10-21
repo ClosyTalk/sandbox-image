@@ -1,4 +1,5 @@
 """Run inside the image with Docker networking disabled; only loopback is used."""
+import contextlib
 import http.server
 import importlib.util
 import json
@@ -14,8 +15,32 @@ import threading
 import unittest
 
 
-def run(*args, timeout=45):
-    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout).stdout
+def run(*args, timeout=45, input_text=None):
+    return subprocess.run(args, check=True, capture_output=True, text=True, timeout=timeout, input=input_text).stdout
+
+
+@contextlib.contextmanager
+def serve(body, content_type):
+    """Serve one body on a loopback port, the only network the offline checks have."""
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 class OfflineRuntime(unittest.TestCase):
@@ -165,6 +190,75 @@ class OfflineRuntime(unittest.TestCase):
                 self.assertGreater(image.width, 100)
                 self.assertLess(min(image.convert("L").getextrema()), 100)
 
+    def test_cli_tools_offline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with serve(b'{"status": "ok", "items": [1, 2]}', "application/json") as url:
+                body = run("curl", "--fail", "--silent", "--show-error", f"{url}/status")
+                self.assertEqual(run("jq", "-c", ".items", input_text=body).strip(), "[1,2]")
+                port = url.rsplit(":", 1)[1]
+                run("nc", "-z", "-w", "2", "127.0.0.1", port)
+
+            source = root / "notes.txt"
+            source.write_text("Offline tools\n" * 100)
+            run("zip", "-q", "-j", str(root / "notes.zip"), str(source))
+            self.assertIn("Zip archive", run("file", "--brief", str(root / "notes.zip")))
+            self.assertIn("Offline tools", run("unzip", "-p", str(root / "notes.zip"), "notes.txt"))
+            for compressor, extension in (("xz", "xz"), ("bzip2", "bz2")):
+                run(compressor, "--keep", str(source))
+                self.assertIn("Offline tools", run(compressor, "-dc", f"{source}.{extension}"))
+
+            self.assertIn("notes.txt:1:Offline tools", run("rg", "--no-heading", "-n", "-m1", "Offline", str(root)).replace(str(root) + "/", ""))
+            self.assertIn("4f66 666c 696e 6520", run("xxd", "-l", "8", str(source)))
+            self.assertEqual(run("column", "-t", "-s", ",", input_text="a,bb\nccc,d\n"), "a    bb\nccc  d\n")
+            self.assertEqual(run("bc", input_text="6*7\n").strip(), "42")
+            changed = root / "changed.txt"
+            changed.write_text("Offline tools patched\n")
+            diff = subprocess.run(("diff", "-u", str(source), str(changed)), capture_output=True, text=True).stdout
+            run("patch", "--quiet", str(source), input_text=diff)
+            self.assertEqual(source.read_text(), "Offline tools patched\n")
+            self.assertIn("notes.zip", run("tree", str(root)))
+            for binary in ("wget", "less", "hexdump", "dig", "nslookup", "host", "ip", "ss"):
+                self.assertIsNotNone(shutil.which(binary), f"Missing {binary}")
+
+            database = str(root / "data.sqlite")
+            run("sqlite3", database, "create table t(v integer); insert into t values (2), (40);")
+            self.assertEqual(run("sqlite3", database, "select sum(v) from t;").strip(), "42")
+
+    def test_data_libraries_offline(self):
+        import bs4
+        import pandas as pd
+        import pdfplumber
+        from pypdf import PdfReader
+        from reportlab.pdfgen.canvas import Canvas
+        import requests
+        import seaborn as sns
+        import xlrd
+        import yaml
+
+        page = b"<html><body><table><tr><td class='v'>42</td></tr></table></body></html>"
+        with serve(page, "text/html") as url:
+            response = requests.get(url, timeout=5)
+            response.raise_for_status()
+        self.assertEqual(bs4.BeautifulSoup(response.text, "lxml").select_one("td.v").text, "42")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            canvas = Canvas(str(root / "report.pdf"))
+            canvas.drawString(72, 720, "Quarterly total 42")
+            canvas.save()
+            self.assertIn("Quarterly total 42", PdfReader(root / "report.pdf").pages[0].extract_text())
+            with pdfplumber.open(root / "report.pdf") as pdf:
+                self.assertIn("Quarterly total 42", pdf.pages[0].extract_text())
+
+            plot = sns.barplot(data=pd.DataFrame({"region": ["N", "S"], "amount": [3, 5]}), x="region", y="amount")
+            plot.figure.savefig(root / "seaborn.png")
+            self.assertGreater((root / "seaborn.png").stat().st_size, 1000)
+
+        self.assertIn("|  0 |       42 |", pd.DataFrame({"amount": [42]}).to_markdown())
+        self.assertEqual(yaml.safe_load(yaml.safe_dump({"items": [1, 2]})), {"items": [1, 2]})
+        self.assertTrue(xlrd.__version__.startswith("2."), "Legacy .xls reading needs xlrd 2")
+
     def test_fonts_and_licenses(self):
         for family in ("Liberation Sans", "Carlito", "DejaVu Sans", "Noto Sans"):
             self.assertIn(family, run("fc-match", "-f", "%{family}", family))
@@ -193,50 +287,32 @@ class OfflineRuntime(unittest.TestCase):
         <button id="save" onclick="document.querySelector('#result').textContent='Saved '+document.querySelector('#name').value">Save</button>
         <p id="result">Waiting</p></body></html>'''
 
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def do_GET(self):
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.end_headers()
-                self.wfile.write(html)
-
-            def log_message(self, *_):
-                pass
-
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-
         def browser(*args):
             response = json.loads(run("agent-browser", "--session", "offline-test", "--json", *args))
             self.assertTrue(response["success"], response)
             return response["data"]
 
-        try:
-            browser("open", f"http://127.0.0.1:{server.server_port}")
-            snapshot = browser("snapshot", "-i")
-            self.assertIn("Name", json.dumps(snapshot))
-            self.assertIn("Save", json.dumps(snapshot))
-            refs = snapshot["refs"]
-            textbox = next(ref for ref, item in refs.items() if item["role"] == "textbox" and item["name"] == "Name")
-            button = next(ref for ref, item in refs.items() if item["role"] == "button" and item["name"] == "Save")
-            browser("fill", f"@{textbox}", "ClosyTalk")
-            browser("click", f"@{button}")
-            self.assertIn("Saved ClosyTalk", json.dumps(browser("get", "text", "#result")))
-            with tempfile.TemporaryDirectory() as directory:
-                shot = Path(directory) / "screenshot.png"
-                browser("screenshot", str(shot))
-                with Image.open(shot) as image:
-                    self.assertGreaterEqual(image.width, 800)
-                    self.assertLess(min(image.convert("L").getextrema()), 100)
-                    self.assertGreater(max(image.convert("L").getextrema()), 200)
-        finally:
+        with serve(html, "text/html") as url:
             try:
-                browser("close")
+                browser("open", url)
+                snapshot = browser("snapshot", "-i")
+                self.assertIn("Name", json.dumps(snapshot))
+                self.assertIn("Save", json.dumps(snapshot))
+                refs = snapshot["refs"]
+                textbox = next(ref for ref, item in refs.items() if item["role"] == "textbox" and item["name"] == "Name")
+                button = next(ref for ref, item in refs.items() if item["role"] == "button" and item["name"] == "Save")
+                browser("fill", f"@{textbox}", "ClosyTalk")
+                browser("click", f"@{button}")
+                self.assertIn("Saved ClosyTalk", json.dumps(browser("get", "text", "#result")))
+                with tempfile.TemporaryDirectory() as directory:
+                    shot = Path(directory) / "screenshot.png"
+                    browser("screenshot", str(shot))
+                    with Image.open(shot) as image:
+                        self.assertGreaterEqual(image.width, 800)
+                        self.assertLess(min(image.convert("L").getextrema()), 100)
+                        self.assertGreater(max(image.convert("L").getextrema()), 200)
             finally:
-                server.shutdown()
-                server.server_close()
-                thread.join(timeout=5)
+                browser("close")
 
 
 if __name__ == "__main__":
