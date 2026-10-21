@@ -5,3 +5,11 @@ python-pptx
 matplotlib
 docxtpl
 pandas
+requests
+beautifulsoup4
+pypdf
+pdfplumber
+xlrd
+tabulate
+seaborn
+pyyaml
