@@ -129,7 +129,7 @@ class OfflineRuntime(unittest.TestCase):
     def test_runtime_and_no_external_network(self):
         self.assertEqual(os.getuid(), 10001, "Agent code must run as the sandbox user")
         self.assertEqual(platform.python_version_tuple()[:2], ("3", "12"))
-        self.assertEqual(run("node", "--version").strip(), "v22.23.3")
+        self.assertEqual(run("node", "--version").strip(), "v22.23.4")
         self.assertIn("0.39.0", run("agent-browser", "--version"))
         self.assertIn("156.0.8078.4", run("chromium", "--version"))
         self.assertIsNone(shutil.which("npm"), "Do not ship the build-only npm dependency tree in the runtime")
