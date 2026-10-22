@@ -39,7 +39,7 @@ RUN python3 -m venv /opt/venv \
 
 FROM ${UBUNTU_IMAGE} AS runtime
 ARG APT_REFRESH
-ARG IMAGE_VERSION=0.3.0
+ARG IMAGE_VERSION=0.3.1
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-image" \
       org.opencontainers.image.title="ClosyTalk agent sandbox" \
