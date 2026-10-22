@@ -58,8 +58,9 @@ pinned upstream source. Platform and Shipyard consume their immutable GHCR refer
   gate, suppress findings, or skip an architecture to make an update pass.
 - `security.yml` runs on every PR and nightly. OSV-Scanner gates
   `requirements.txt` and `package-lock.json` on `CRITICAL`; zizmor fails on
-  any unsuppressed workflow finding; Trivy rescans the three most recent stable
-  releases of each image by digest on both architectures with the same gate.
+  any unsuppressed workflow finding; Trivy rescans the latest stable release
+  of each image by digest on both architectures with the same gate (older
+  releases are immutable: their consumers move to the latest instead).
   A red nightly on a published image means its consumers are exposed until a
   patched release or rebuild is rolled out. Scanners run as digest-pinned
   containers without capabilities, root, docker socket or credentials.
