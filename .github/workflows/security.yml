@@ -1,11 +1,11 @@
 # Nightly security scan of what consumers actually pin.
 #
 # New advisories land against images and lockfiles that have not changed, so
-# rebuilding is not the signal: this rescans the recent stable releases by
-# digest, the hashed lockfiles and the workflows themselves. A red nightly on a
-# published image means its consumers are exposed until a patched release is
-# rolled out; a fix that only needs refreshed OS packages is a manual
-# `publish` rebuild of image.yml or execd.yml from main.
+# rebuilding is not the signal: this rescans the latest stable release of each
+# image by digest, the hashed lockfiles and the workflows themselves. A red
+# nightly on a published image means its consumers are exposed until a patched
+# release is rolled out; a fix that only needs refreshed OS packages is a
+# manual `publish` rebuild of image.yml or execd.yml from main.
 #
 # Scanners run as digest-pinned containers with no capabilities, as the runner
 # uid, without the docker socket and with no token. Trivy applies the same
@@ -147,14 +147,18 @@ jobs:
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
     steps:
-      - name: Read the image and digest of the recent stable releases
+      - name: Read the image and digest of the latest stable releases
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          # Covers the current release and those consumers have not yet left.
-          RECENT_RELEASES: 3
+          # The latest stable release of each image only. Published releases are
+          # immutable, so a finding on an older one is never fixed there: the
+          # answer is always to move its consumers to the latest, which is what
+          # Platform, Shipyard and platform-customers pin. Scanning the older
+          # ones only kept the nightly red on releases nobody runs.
+          RECENT_RELEASES: 1
         run: |
           set -euo pipefail
           # Published images do not change with a pull request: scan them there
