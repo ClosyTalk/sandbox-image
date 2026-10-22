@@ -9,7 +9,7 @@ docker run --rm --platform "$platform" --network none --cap-drop ALL --cap-add C
     test -x /execd
     help=$(/execd --help 2>&1)
     printf "%s\n" "$help" | grep "Version.*docker/execd/v1.0.20"
-    printf "%s\n" "$help" | grep -F "go1.27.2"
+    printf "%s\n" "$help" | grep -F "go1.27.3"
     printf "%s\n" "$help" | grep -F "ae452d4af7b6415b5074fd7e075b97ff7a5ac236"
     test ! -e /execd.exe
     test ! -e /opensandbox-supervisor
@@ -44,7 +44,7 @@ esac
 [ "$(docker image inspect "$image" --format '{{.Config.WorkingDir}}')" = / ]
 [ "$(docker image inspect "$image" --format '{{json .Config.Cmd}}')" = null ]
 [ "$(docker image inspect "$image" --format '{{json .Config.Env}}')" = '["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"]' ]
-[ "$(docker image inspect "$image" --format '{{index .Config.Labels "io.closytalk.execd.go.version"}}')" = go1.27.2 ]
+[ "$(docker image inspect "$image" --format '{{index .Config.Labels "io.closytalk.execd.go.version"}}')" = go1.27.3 ]
 
 # Exercise the default entrypoint and real API entirely offline, without a host port.
 container=$(docker run -d --platform "$platform" --network none --cap-drop ALL \
