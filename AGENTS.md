@@ -1,4 +1,4 @@
-# AGENTS.md — ClosyTalk sandbox images
+# AGENTS.md — Harboria sandbox images
 
 This public repository builds the agent environment and OpenSandbox execd from
 pinned upstream source. Platform and Shipyard consume their immutable GHCR references.
@@ -21,7 +21,7 @@ pinned upstream source. Platform and Shipyard consume their immutable GHCR refer
   copied in `Dockerfile` and check its runtime libraries.
 - For execd, pin the upstream repository, full source commit SHA and archive
   checksum in `Dockerfile.execd`. Preserve the upstream binary version string;
-  `EXECD_VERSION` is the independently versioned ClosyTalk image release. Update
+  `EXECD_VERSION` is the independently versioned Harboria image release. Update
   its Dockerfile default, image labels and `test-execd.sh` checks together. Use a
   new patch release for compatible security fixes; never overwrite a published tag.
 - Build execd with the latest patched stable Go release, with its builder image
