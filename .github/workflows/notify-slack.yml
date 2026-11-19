@@ -35,7 +35,7 @@ jobs:
   notify:
     # PRs keep their checks and reports; only trusted runs reach Slack.
     if: >-
-      github.repository == 'Harboria/sandbox-image' &&
+      github.repository == 'Harboria-ai/sandbox-image' &&
       contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event_name) &&
       (github.ref == 'refs/heads/main' ||
        (github.event_name == 'push' && github.ref_type == 'tag'))
@@ -56,7 +56,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh api "repos/Harboria/sandbox-image/actions/runs/$GITHUB_RUN_ID/artifacts" \
+          gh api "repos/Harboria-ai/sandbox-image/actions/runs/$GITHUB_RUN_ID/artifacts" \
             --paginate --jq '.artifacts[] | select(.expired == false) | .name' > "$RUNNER_TEMP/artifact-names"
           if grep -Eq '^reports-' "$RUNNER_TEMP/artifact-names"; then
             echo 'reports=true' >> "$GITHUB_OUTPUT"

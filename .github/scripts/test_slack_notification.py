@@ -31,7 +31,7 @@ class SlackNotificationTests(unittest.TestCase):
         directory = self.root / "publication"
         directory.mkdir()
         (directory / "image.json").write_text(json.dumps({
-            "image": "ghcr.io/harboria/sandbox",
+            "image": "ghcr.io/harboria-ai/sandbox",
             "version": version,
             "digest": "sha256:" + "a" * 64,
         }))
