@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  IMAGE: ghcr.io/closytalk/sandbox
+  IMAGE: ghcr.io/harboria/sandbox
   TRIVY_IMAGE: aquasec/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa
 
 jobs:
@@ -147,7 +147,7 @@ jobs:
     needs: [prepare, build, publish]
     if: >-
       always() && needs.prepare.result == 'success' &&
-      github.repository == 'ClosyTalk/sandbox-image' &&
+      github.repository == 'Harboria/sandbox-image' &&
       github.event_name != 'pull_request' &&
       (github.ref == 'refs/heads/main' ||
        (github.event_name == 'push' && github.ref_type == 'tag'))
@@ -164,7 +164,7 @@ jobs:
   publish:
     name: Publish tested images
     needs: [prepare, build]
-    if: github.repository == 'ClosyTalk/sandbox-image' && needs.prepare.outputs.publish == 'true'
+    if: github.repository == 'Harboria/sandbox-image' && needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -209,7 +209,7 @@ jobs:
           digest=$(skopeo inspect --authfile "$HOME/.docker/config.json" --format '{{.Digest}}' "docker://$manifest")
           cosign sign --yes "$IMAGE@$digest"
           cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-identity-regexp '^https://github.com/ClosyTalk/sandbox-image/.github/workflows/execd.yml@refs/(heads/main|tags/execd-v[0-9]+\.[0-9]+\.[0-9]+)$' \
+            --certificate-identity-regexp '^https://github.com/Harboria/sandbox-image/.github/workflows/execd.yml@refs/(heads/main|tags/execd-v[0-9]+\.[0-9]+\.[0-9]+)$' \
             "$IMAGE@$digest"
           docker buildx imagetools create --tag "$target" "$IMAGE@$digest"
           printf '{"image":"%s","version":"%s","digest":"%s"}\n' "$IMAGE" "execd-$VERSION" "$digest" > image.json
@@ -222,7 +222,7 @@ jobs:
           gh release create "execd-v$VERSION" image.json \
             vulnerabilities-amd64.json vulnerabilities-arm64.json \
             sbom-amd64.spdx.json sbom-arm64.spdx.json "${release_flags[@]}" \
-            --repo ClosyTalk/sandbox-image --target "$GITHUB_SHA" \
+            --repo Harboria/sandbox-image --target "$GITHUB_SHA" \
             --title "Execd $VERSION" --notes "Native amd64 and arm64 execd and workspace migration checks passed. Image: $IMAGE@$digest. SPDX SBOMs and vulnerability reports are attached. The image carries BuildKit provenance and SBOM attestations and is signed with Sigstore."
           printf 'Published %s@%s\n' "$IMAGE" "$digest" >> "$GITHUB_STEP_SUMMARY"
       - name: Record the completed publication for Slack

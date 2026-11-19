@@ -58,7 +58,7 @@ COPY --from=builder --chown=0:0 --chmod=755 /build/execd /execd
 COPY --from=builder --chown=0:0 --chmod=755 /build/components/execd/bootstrap.sh /bootstrap.sh
 COPY --from=builder --chown=0:0 --chmod=644 /build/components/execd/install.bat /install.bat
 LABEL keep-on-prune="true" \
-    org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-image" \
+    org.opencontainers.image.source="https://github.com/Harboria/sandbox-image" \
     org.opencontainers.image.title="OpenSandbox execd with prune protection" \
     org.opencontainers.image.version="${IMAGE_VERSION}" \
     org.opencontainers.image.revision="${SOURCE_REVISION}" \

@@ -174,12 +174,15 @@ jobs:
           : > "$RUNNER_TEMP/releases"
           for pattern in '^v[0-9]+\.[0-9]+\.[0-9]+$' '^execd-v[0-9]+\.[0-9]+\.[0-9]+$'; do
             for tag in $({ grep -E "$pattern" "$RUNNER_TEMP/tags" || true; } | sort -V | tail -n "$RECENT_RELEASES"); do
-              # The release workflow records the signed digest in image.json.
+              # The release workflow records the signed digest in image.json. Releases
+              # published before the organization was renamed record ghcr.io/closytalk:
+              # the package moved to ghcr.io/harboria with the same digests.
               gh release download "$tag" --repo "$GITHUB_REPOSITORY" --pattern image.json --output - |
                 jq -ce --arg version "${tag/v/}" '
-                  select(.image == "ghcr.io/closytalk/sandbox" and .version == $version
+                  select((.image == "ghcr.io/harboria/sandbox" or .image == "ghcr.io/closytalk/sandbox")
+                    and .version == $version
                     and (.digest | test("^sha256:[a-f0-9]{64}$")))
-                  | {version, ref: "\(.image)@\(.digest)"}' >> "$RUNNER_TEMP/releases"
+                  | {version, ref: "ghcr.io/harboria/sandbox@\(.digest)"}' >> "$RUNNER_TEMP/releases"
             done
           done
           if [ ! -s "$RUNNER_TEMP/releases" ]; then
@@ -241,7 +244,7 @@ jobs:
     # request the failed check already reaches its author.
     if: >-
       !cancelled() && contains(needs.*.result, 'failure') &&
-      github.repository == 'ClosyTalk/sandbox-image' && github.ref == 'refs/heads/main' &&
+      github.repository == 'Harboria/sandbox-image' && github.ref == 'refs/heads/main' &&
       contains(fromJSON('["schedule", "workflow_dispatch"]'), github.event_name)
     permissions:
       contents: read
