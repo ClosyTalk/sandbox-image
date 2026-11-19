@@ -23,14 +23,14 @@ def build_payload(run, artifact_directory, job_results=None):
         image = json.loads(publication.read_text())
         version = image["version"]
         if (
-            image["image"] != "ghcr.io/closytalk/sandbox"
+            image["image"] != "ghcr.io/harboria-ai/sandbox"
             or not re.fullmatch(r"(?:execd-)?\d+\.\d+\.\d+(?:-rebuild\.\d{8}\.\d+\.\d+)?", version)
             or not re.fullmatch(r"sha256:[a-f0-9]{64}", image["digest"])
         ):
             raise ValueError("Invalid publication metadata")
         tag = "execd-v" + version.removeprefix("execd-") if version.startswith("execd-") else "v" + version
         lines.extend([f"✅ Nuova versione pubblicata: {version}", f'{image["image"]}:{version}', image["digest"]])
-        links.append(f"<https://github.com/ClosyTalk/sandbox-image/releases/tag/{tag}|Release e report>")
+        links.append(f"<https://github.com/Harboria-ai/sandbox-image/releases/tag/{tag}|Release e report>")
 
     findings = []
     any_fixable = False
@@ -67,7 +67,7 @@ def build_payload(run, artifact_directory, job_results=None):
 
     lines.append(f'Ref: {run["head_branch"]} · Esito pipeline: {run["conclusion"]}')
     run_id = int(run["id"])
-    links.append(f"<https://github.com/ClosyTalk/sandbox-image/actions/runs/{run_id}|Pipeline e artefatti>")
+    links.append(f"<https://github.com/Harboria-ai/sandbox-image/actions/runs/{run_id}|Pipeline e artefatti>")
     text = "\n".join(lines)
     return {
         "text": text,
