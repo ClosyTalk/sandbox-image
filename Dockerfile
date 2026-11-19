@@ -42,7 +42,7 @@ ARG APT_REFRESH
 ARG IMAGE_VERSION=0.3.1
 ARG SOURCE_REVISION
 LABEL org.opencontainers.image.source="https://github.com/ClosyTalk/sandbox-image" \
-      org.opencontainers.image.title="ClosyTalk agent sandbox" \
+      org.opencontainers.image.title="Harboria agent sandbox" \
       org.opencontainers.image.version="${IMAGE_VERSION}" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       keep-on-prune="true"
